@@ -1,0 +1,54 @@
+# Full stack. Expects igad-rainfall-pipeline checked out next to this repo. The pipeline writes COGs
+# and STAC to its data/ folder and district alerts to this PostGIS; the API and TiTiler read them.
+#   docker compose up -d postgis
+#   docker compose --profile pipeline run --rm pipeline --date 2026-06-30 --no-validate
+#   docker compose up -d        ->  http://localhost:3000
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: hazards
+      POSTGRES_USER: hazards
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hazards}
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hazards -d hazards"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: ./api
+    environment:
+      DATABASE_URL: postgresql://hazards:${POSTGRES_PASSWORD:-hazards}@postgis:5432/hazards
+      STAC_DIR: /data/stac
+      COG_ROOT: /data/cog
+    volumes: ["${PRODUCTS_DIR:-../igad-rainfall-pipeline/data}:/data:ro"]
+    ports: ["8000:8000"]
+    depends_on:
+      postgis: { condition: service_healthy }
+
+  titiler:
+    image: ghcr.io/developmentseed/titiler:latest
+    environment:
+      PORT: 8000
+      WORKERS_PER_CORE: 1
+    volumes: ["${PRODUCTS_DIR:-../igad-rainfall-pipeline/data}:/data:ro"]
+    ports: ["8080:8000"]
+
+  pipeline:
+    build: ${PIPELINE_DIR:-../igad-rainfall-pipeline}
+    profiles: ["pipeline"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://hazards:${POSTGRES_PASSWORD:-hazards}@postgis:5432/hazards
+    volumes: ["${PRODUCTS_DIR:-../igad-rainfall-pipeline/data}:/data"]
+    depends_on:
+      postgis: { condition: service_healthy }
+
+  web:
+    build: ./web
+    ports: ["3000:80"]
+    depends_on: [api, titiler]
+
+volumes:
+  pgdata:
